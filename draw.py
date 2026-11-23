@@ -1,233 +1,287 @@
 #!/usr/bin/env python3
-"""Draw the 23 November 2026 world-news poster (1024x1024 PNG).
+"""Draw a 1024x1024 newspaper front page summing up Monday 23 November 2026.
 
-A newspaper front page: masthead with the date, four story panels and a
-bottom sport strip. Every illustration is drawn from flat shapes with PIL;
-all text is set in DejaVu Sans / DejaVu Serif.
-
-Layout rule: in each panel the tag sits top-left, the illustration lives
-in a fixed top-right box, the headline runs down the left, and the subline
-starts below the headline (dynamic y, never a fixed offset).
+Layout (my own design): a navy masthead, then a 2x2 grid of story cards
+with a text column on the left and a small pictogram on the right, then a
+full-width sport strip and a footer line. Rendered with Pillow only.
 """
+
 import math
-import random
+import os
+
 from PIL import Image, ImageDraw, ImageFont
 
-W = H = 1024
+CANVAS = (1024, 1024)
 PAPER = (248, 244, 233)
-INK = (26, 26, 46)
-NAVY = (18, 38, 74)
-RED = (179, 38, 30)
-TEAL = (14, 124, 107)
-GOLD = (200, 144, 26)
-GREY = (90, 90, 100)
+CARD = (255, 255, 255)
+INK = (22, 28, 52)
+NAVY = (18, 36, 72)
+NAVY_LIGHT = (178, 190, 216)
+RULE_RED = (178, 34, 34)
+BODY_GREY = (58, 62, 78)
 
-FB = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-FR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-FSB = "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"
-FSS = "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"
+FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 
 
-def font(path, size):
-    return ImageFont.truetype(path, size)
+def font(name, size):
+    """Load a DejaVu font, falling back to Pillow's built-in font."""
+    try:
+        return ImageFont.truetype(os.path.join(FONT_DIR, name), size)
+    except OSError:
+        return ImageFont.load_default(size)
 
 
-def wrap(draw, text, fnt, max_w):
-    words = text.split()
-    lines, cur = [], ""
-    for w in words:
-        trial = (cur + " " + w).strip()
-        if draw.textlength(trial, font=fnt) <= max_w:
-            cur = trial
+SERIF_BOLD = lambda s: font("DejaVuSerif-Bold.ttf", s)  # noqa: E731
+SERIF = lambda s: font("DejaVuSerif.ttf", s)  # noqa: E731
+SANS_BOLD = lambda s: font("DejaVuSans-Bold.ttf", s)  # noqa: E731
+SANS = lambda s: font("DejaVuSans.ttf", s)  # noqa: E731
+
+
+def wrap(draw, text, fnt, width):
+    """Greedy word wrap; returns a list of lines that fit inside width."""
+    lines = []
+    current = ""
+    for word in text.split():
+        trial = (current + " " + word).strip()
+        if draw.textlength(trial, font=fnt) <= width:
+            current = trial
         else:
-            if cur:
-                lines.append(cur)
-            cur = w
-    if cur:
-        lines.append(cur)
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
     return lines
 
 
-def text_block(draw, x, y, text, fnt, fill, max_w, leading=None):
-    leading = leading or int(fnt.size * 1.24)
-    for ln in wrap(draw, text, fnt, max_w):
-        draw.text((x, y), ln, font=fnt, fill=fill)
+def draw_lines(draw, lines, x, y, fnt, fill, leading):
+    """Draw stacked lines; returns the y just below the last line."""
+    for line in lines:
+        draw.text((x, y), line, font=fnt, fill=fill)
         y += leading
     return y
 
 
-def tag(draw, x, y, label, color):
-    f = font(FB, 20)
-    w = draw.textlength(label, font=f) + 22
-    draw.rounded_rectangle([x, y, x + w, y + 30], radius=4, fill=color)
-    draw.text((x + 11, y + 4), label, font=f, fill=(255, 255, 255))
+def centred(draw, text, cx, y, fnt, fill):
+    """Draw text centred on cx."""
+    w = draw.textlength(text, font=fnt)
+    draw.text((cx - w / 2, y), text, font=fnt, fill=fill)
 
 
-img = Image.new("RGB", (W, H), PAPER)
-d = ImageDraw.Draw(img)
-
-# ---------------------------------------------------------------- masthead
-d.rectangle([0, 0, W, 148], fill=NAVY)
-d.text((512, 16), "T H E   W O R L D   I N   O N E   D A Y",
-       font=font(FB, 24), fill=(200, 210, 235), anchor="ma")
-d.text((512, 46), "MONDAY, 23 NOVEMBER 2026",
-       font=font(FSB, 56), fill=(255, 255, 255), anchor="ma")
-d.text((512, 112), "The day's news, in one picture",
-       font=font(FSS, 22), fill=(200, 210, 235), anchor="ma")
-d.line([24, 148, 1000, 148], fill=RED, width=4)
-
-MX = 24          # outer margin
-CW = 476         # column width
-GX = 524         # second column x
-SUB = (50, 50, 60)
+def tag_chip(draw, x, y, label, colour):
+    """A small coloured label chip; returns its width."""
+    fnt = SANS_BOLD(17)
+    w = draw.textlength(label, font=fnt) + 22
+    draw.rounded_rectangle([x, y, x + w, y + 30], radius=6, fill=colour)
+    draw.text((x + 11, y + 5), label, font=fnt, fill=(255, 255, 255))
+    return w
 
 
-def panel(x, y, w, h, accent):
-    d.rounded_rectangle([x, y, x + w, y + h], radius=10,
-                        fill=(255, 255, 255), outline=INK, width=2)
-    d.rectangle([x, y, x + w, y + 8], fill=accent)
+# ---------------------------------------------------------------- pictograms
+
+def globe_icon(draw, cx, cy, r):
+    """Cracked globe: blue disc, green land blobs, a red zig-zag crack."""
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(66, 135, 200),
+                 outline=INK, width=3)
+    draw.ellipse([cx - r + 12, cy - r + 14, cx - 8, cy - 2],
+                 fill=(74, 160, 90))
+    draw.ellipse([cx + 2, cy + 6, cx + r - 10, cy + r - 12],
+                 fill=(74, 160, 90))
+    draw.arc([cx - r, cy - r, cx + r, cy + r], 200, 340, fill=NAVY_LIGHT, width=2)
+    crack = [(cx - 14, cy - r + 4), (cx + 6, cy - r // 2), (cx - 10, cy),
+             (cx + 10, cy + r // 2), (cx - 4, cy + r - 6)]
+    draw.line(crack, fill=(200, 30, 30), width=5, joint="curve")
+    draw.text((cx - 34, cy + r + 8), "NO DEAL", font=SANS_BOLD(16),
+              fill=(178, 34, 34))
 
 
-def story(x, y, w, h, accent, label, headline, sub, art):
-    """One panel: tag, headline (left), subline below it, art top-right.
-
-    The subline stays in the left column (292 px) so it never runs
-    under the illustration.
-    """
-    panel(x, y, w, h, accent)
-    tag(d, x + 16, y + 20, label, accent)
-    art(x, y)
-    hy = text_block(d, x + 16, y + 58, headline, font(FSB, 30), INK, 292)
-    text_block(d, x + 16, hy + 10, sub, font(FR, 19), SUB, 292, leading=24)
-
-
-# ---------------------------------------------- 1. COP31 collapse (lead)
-def art_cop31(x, y):
-    cx, cy, r = x + 388, y + 78, 52
-    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(66, 135, 200),
-              outline=INK, width=3)
-    d.ellipse([cx - 30, cy - 34, cx + 4, cy - 4], fill=(74, 160, 90))
-    d.ellipse([cx + 2, cy + 6, cx + 32, cy + 34], fill=(74, 160, 90))
-    d.line([cx - r, cy, cx + r, cy], fill=(255, 255, 255), width=2)
-    # a red crack splits the globe: no deal
-    crack = [(cx - 34, cy - 52), (cx - 12, cy - 26), (cx - 26, cy - 2),
-             (cx + 2, cy + 22), (cx - 10, cy + 44), (cx + 16, cy + 52)]
-    d.line(crack, fill=RED, width=6, joint="curve")
-    d.text((cx, cy + 62), "NO DEAL", font=font(FB, 20), fill=RED,
-           anchor="ma")
+def tanker_icon(draw, cx, cy):
+    """A tanker hull with flames and smoke above a wavy sea."""
+    draw.polygon([(cx - 62, cy + 6), (cx + 62, cy + 6), (cx + 48, cy + 34),
+                  (cx - 48, cy + 34)], fill=(52, 58, 84), outline=INK, width=2)
+    draw.rectangle([cx - 34, cy - 12, cx - 8, cy + 6], fill=(200, 200, 205),
+                   outline=INK, width=2)
+    draw.rectangle([cx + 8, cy - 12, cx + 30, cy + 6], fill=(180, 185, 195),
+                   outline=INK, width=2)
+    for fx, fh in ((-46, 34), (-16, 46), (16, 36), (42, 28)):
+        draw.polygon([(cx + fx - 9, cy - 12), (cx + fx, cy - 12 - fh),
+                      (cx + fx + 9, cy - 12)],
+                     fill=(232, 110, 28), outline=(160, 60, 10), width=1)
+    for sx, sy, sr in ((-52, -62, 9), (-34, -76, 12), (-12, -66, 8)):
+        draw.ellipse([cx + sx - sr, cy + sy - sr, cx + sx + sr, cy + sy + sr],
+                     fill=(150, 150, 155))
+    for wy, wl in ((cy + 48, 120), (cy + 62, 96)):
+        draw.line([(cx - wl // 2, wy), (cx + wl // 2, wy)],
+                  fill=(66, 135, 200), width=3)
 
 
-story(MX, 164, CW, 300, TEAL, "CLIMATE  ·  ANTALYA",
-      "COP31 COLLAPSES: NO DEAL",
-      "The EU and UK reject a text that never names fossil fuels; the longest COP on record ends with nothing.",
-      art_cop31)
-
-# ------------------------------------------- 2. Hormuz tankers (lead)
-def art_hormuz(x, y):
-    bx, by = x + 330, y + 96
-    # tanker hull
-    d.polygon([(bx, by), (bx + 128, by), (bx + 116, by + 30),
-               (bx + 12, by + 30)], fill=(60, 60, 70), outline=INK, width=3)
-    d.rectangle([bx + 18, by - 26, bx + 46, by], fill=(200, 200, 210),
-                outline=INK, width=2)
-    d.rectangle([bx + 58, by - 16, bx + 78, by], fill=(200, 200, 210),
-                outline=INK, width=2)
-    # flames and smoke above the deck
-    for fx, fh, col in [(bx + 30, 34, (230, 120, 30)),
-                        (bx + 58, 46, (230, 80, 20)),
-                        (bx + 88, 30, (240, 160, 40))]:
-        d.polygon([(fx, by - 26), (fx + 12, by - 26 - fh),
-                   (fx + 24, by - 26)], fill=col, outline=INK, width=2)
-    d.ellipse([bx + 96, by - 78, bx + 122, by - 52], fill=(120, 120, 130))
-    d.ellipse([bx + 110, by - 96, bx + 132, by - 74], fill=(150, 150, 160))
-    # sea
-    d.line([bx - 8, by + 44, bx + 136, by + 44], fill=(66, 135, 200), width=4)
-    d.line([bx + 4, by + 56, bx + 124, by + 56], fill=(66, 135, 200), width=3)
+def drone_ship_icon(draw, cx, cy):
+    """A listing warship hull with a small drone hovering above it."""
+    draw.polygon([(cx - 58, cy - 6), (cx + 56, cy + 18), (cx + 40, cy + 38),
+                  (cx - 44, cy + 26)], fill=(96, 104, 122), outline=INK, width=2)
+    draw.rectangle([cx - 18, cy - 34, cx + 8, cy - 8], fill=(70, 76, 94),
+                   outline=INK, width=2)
+    draw.line([(cx - 30, cy - 8), (cx - 30, cy + 14)], fill=INK, width=3)
+    draw.line([(cx + 22, cy + 2), (cx + 22, cy + 24)], fill=INK, width=3)
+    # drone: body + four rotors
+    draw.ellipse([cx - 14, cy - 78, cx + 14, cy - 62], fill=(40, 44, 66),
+                 outline=INK, width=2)
+    for rx in (-26, 26):
+        draw.line([(cx + rx - 12, cy - 74), (cx + rx + 12, cy - 74)],
+                  fill=INK, width=3)
+    draw.line([(cx - 14, cy - 70), (cx - 26, cy - 70)], fill=INK, width=2)
+    draw.line([(cx + 14, cy - 70), (cx + 26, cy - 70)], fill=INK, width=2)
+    draw.arc([cx - 58, cy + 48, cx + 58, cy + 78], 0, 180,
+             fill=(66, 135, 200), width=3)
+    draw.arc([cx - 40, cy + 60, cx + 40, cy + 86], 0, 180,
+             fill=(66, 135, 200), width=2)
 
 
-story(GX, 164, CW, 300, RED, "MIDDLE EAST  ·  HORMUZ",
-      "TANKERS BURN IN THE GULF",
-      "More tankers are struck and hit mines in the Strait of Hormuz; attacks on shipping hit their highest level since the war began.",
-      art_hormuz)
-
-# ------------------------------------------------------- 3. Libya
-def art_libya(x, y):
-    bx, by = x + 388, y + 104
-    # capsized corvette: tilted hull, bow down
-    d.polygon([(bx - 52, by - 6), (bx + 52, by + 26), (bx + 40, by + 44),
-               (bx - 44, by + 18)], fill=(90, 100, 115), outline=INK, width=3)
-    d.rectangle([bx - 30, by - 30, bx - 6, by - 4], fill=(60, 60, 70),
-                outline=INK, width=2)
-    # sea drone skimming the water
-    d.ellipse([bx - 6, by + 52, bx + 34, by + 66], fill=(40, 40, 55),
-              outline=INK, width=2)
-    d.line([bx + 4, by + 52, bx + 4, by + 44], fill=INK, width=3)
-    d.line([bx + 24, by + 52, bx + 24, by + 44], fill=INK, width=3)
-    # waves
-    d.arc([bx - 58, by + 58, bx + 58, by + 96], 0, 180,
-          fill=(66, 135, 200), width=4)
-    d.arc([bx - 40, by + 72, bx + 40, by + 106], 0, 180,
-          fill=(66, 135, 200), width=3)
-
-
-story(MX, 484, CW, 252, NAVY, "AFRICA  ·  LIBYA",
-      "SEA DRONES SINK WARSHIP",
-      "Suspected Ukrainian drones hit the Russian corvette Merkury at Benghazi; the ship capsizes, 10 hurt.",
-      art_libya)
-
-# ------------------------------------------------------- 4. Mexico
-def art_mexico(x, y):
-    cx, cy = x + 388, y + 100
-    # badge star
+def badge_icon(draw, cx, cy):
+    """A gold star badge marked $5m above a pair of handcuffs."""
     pts = []
     for i in range(10):
-        ang = math.radians(-90 + i * 36)
-        rr = 52 if i % 2 == 0 else 24
-        pts.append((cx + rr * math.cos(ang), cy + rr * math.sin(ang)))
-    d.polygon(pts, fill=GOLD, outline=INK, width=3)
-    d.ellipse([cx - 22, cy - 22, cx + 22, cy + 22], fill=(255, 255, 255),
-              outline=INK, width=2)
-    d.text((cx, cy - 14), "$5m", font=font(FB, 20), fill=INK, anchor="ma")
-    # handcuff link below the badge
-    d.ellipse([cx - 44, cy + 58, cx - 12, cy + 90], outline=INK, width=5)
-    d.ellipse([cx + 12, cy + 58, cx + 44, cy + 90], outline=INK, width=5)
-    d.line([cx - 12, cy + 74, cx + 12, cy + 74], fill=INK, width=5)
+        ang = -math.pi / 2 + i * math.pi / 5
+        rad = 52 if i % 2 == 0 else 22
+        pts.append((cx + rad * math.cos(ang), cy + rad * math.sin(ang)))
+    draw.polygon(pts, fill=(216, 164, 32), outline=(120, 84, 10), width=2)
+    draw.ellipse([cx - 24, cy - 24, cx + 24, cy + 24], fill=(255, 255, 255),
+                 outline=INK, width=2)
+    draw.text((cx - 21, cy - 11), "$5m", font=SANS_BOLD(17), fill=INK)
+    for hx in (-26, 26):
+        draw.ellipse([cx + hx - 15, cy + 62, cx + hx + 15, cy + 92],
+                     outline=INK, width=4)
+    draw.line([(cx - 11, cy + 77), (cx + 11, cy + 77)], fill=INK, width=4)
 
 
-story(GX, 484, CW, 252, GOLD, "AMERICAS  ·  MEXICO",
-      "CHAPO ISIDRO CAPTURED",
-      "Mexican forces seize the FBI's $5m-wanted Fausto Isidro Meza-Flores in Sinaloa after firefights kill 11.",
-      art_mexico)
+def football_icon(draw, cx, cy, r):
+    """A simple football: circle, centre pentagon, spokes."""
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(255, 255, 255),
+                 outline=INK, width=3)
+    pts = []
+    for i in range(5):
+        ang = -math.pi / 2 + i * 2 * math.pi / 5
+        pts.append((cx + 20 * math.cos(ang), cy + 20 * math.sin(ang)))
+    draw.polygon(pts, fill=INK)
+    for i in range(5):
+        ang = -math.pi / 2 + i * 2 * math.pi / 5
+        ex = cx + r * math.cos(ang)
+        ey = cy + r * math.sin(ang)
+        px = cx + 20 * math.cos(ang)
+        py = cy + 20 * math.sin(ang)
+        draw.line([(px, py), (ex, ey)], fill=INK, width=2)
 
-# ------------------------------------------------------- 5. Sport strip
-PY3 = 756
-panel(MX, PY3, 976, 190, (120, 90, 40))
-tag(d, MX + 16, PY3 + 18, "SPORT", (120, 90, 40))
-# football, top right
-cx, cy, r = MX + 880, PY3 + 95, 46
-d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(255, 255, 255),
-          outline=INK, width=3)
-d.polygon([(cx, cy - 16), (cx + 15, cy - 5), (cx + 9, cy + 13),
-           (cx - 9, cy + 13), (cx - 15, cy - 5)], fill=INK)
-for vx, vy in [(cx, cy - 16), (cx + 15, cy - 5), (cx + 9, cy + 13),
-               (cx - 9, cy + 13), (cx - 15, cy - 5)]:
-    ex = cx + (vx - cx) * 2.4
-    ey = cy + (vy - cy) * 2.4
-    d.line([vx, vy, ex, ey], fill=INK, width=2)
-d.line([MX + 500, PY3 + 30, MX + 500, PY3 + 168], fill=(200, 200, 200), width=2)
-hy = text_block(d, MX + 16, PY3 + 56,
+
+# ------------------------------------------------------------------- cards
+
+def story_card(draw, box, accent, tag, headline, body, icon):
+    """One grid card: accent bar, tag chip, headline + body on the left,
+    pictogram on the right."""
+    x0, y0, x1, y1 = box
+    draw.rounded_rectangle(box, radius=10, fill=CARD, outline=(44, 48, 70),
+                           width=2)
+    draw.rectangle([x0 + 12, y0, x1 - 12, y0 + 8], fill=accent)
+    tag_chip(draw, x0 + 18, y0 + 22, tag, accent)
+    text_w = (x1 - x0) - 36 - 138
+    y = y0 + 64
+    y = draw_lines(draw, wrap(draw, headline, SERIF_BOLD(31), text_w),
+                   x0 + 18, y, SERIF_BOLD(31), INK, 37)
+    y += 8
+    draw_lines(draw, wrap(draw, body, SANS(18), text_w),
+               x0 + 18, y, SANS(18), BODY_GREY, 25)
+    icon(draw, x1 - 82, y0 + 150)
+
+
+def sport_strip(draw, box, headline, body):
+    """Full-width bottom strip for the sport story."""
+    x0, y0, x1, y1 = box
+    draw.rounded_rectangle(box, radius=10, fill=CARD, outline=(44, 48, 70),
+                           width=2)
+    draw.rectangle([x0 + 12, y0, x1 - 12, y0 + 8], fill=(150, 100, 16))
+    tag_chip(draw, x0 + 18, y0 + 22, "SPORT", (150, 100, 16))
+    text_w = (x1 - x0) - 36 - 170
+    # Shrink the headline until it fits on a single line.
+    size = 30
+    while size > 22:
+        fnt = SERIF_BOLD(size)
+        if len(wrap(draw, headline, fnt, text_w)) == 1:
+            break
+        size -= 1
+    y = draw_lines(draw, [headline], x0 + 18, y0 + 60, fnt, INK, size + 6)
+    draw_lines(draw, wrap(draw, body, SANS(18), text_w),
+               x0 + 18, y + 8, SANS(18), BODY_GREY, 25)
+    football_icon(draw, x1 - 96, y0 + (y1 - y0) // 2 + 6, 52)
+
+
+def masthead(draw):
+    """Navy banner naming the day, with a red rule underneath."""
+    draw.rectangle([0, 0, CANVAS[0], 148], fill=NAVY)
+    centred(draw, "T H E   W O R L D   I N   O N E   D A Y", 512, 20,
+            SANS_BOLD(23), NAVY_LIGHT)
+    centred(draw, "MONDAY, 23 NOVEMBER 2026", 512, 50, SERIF_BOLD(56),
+            (255, 255, 255))
+    centred(draw, "The day's news, in one picture", 512, 118, SERIF(23),
+            NAVY_LIGHT)
+    draw.rectangle([0, 148, CANVAS[0], 153], fill=RULE_RED)
+
+
+def build():
+    img = Image.new("RGB", CANVAS, PAPER)
+    draw = ImageDraw.Draw(img)
+    masthead(draw)
+
+    margin, gap = 26, 16
+    col_w = (CANVAS[0] - 2 * margin - gap) // 2
+    row_h = 310
+    top = 166
+
+    cards = [
+        ((margin, top, margin + col_w, top + row_h),
+         (14, 128, 110), "CLIMATE  ·  ANTALYA",
+         "COP31 COLLAPSES: NO DEAL",
+         "The EU and UK reject a text that never names fossil fuels; "
+         "the longest COP on record ends with nothing.",
+         lambda d, cx, cy: globe_icon(d, cx, cy, 56)),
+        ((margin + col_w + gap, top, CANVAS[0] - margin, top + row_h),
+         (178, 34, 34), "MIDDLE EAST  ·  HORMUZ",
+         "TANKERS BURN IN THE GULF",
+         "More tankers are struck and hit mines in the Strait of "
+         "Hormuz; attacks on shipping hit their highest level since "
+         "the war began.",
+         tanker_icon),
+        ((margin, top + row_h + gap, margin + col_w, top + 2 * row_h + gap),
+         NAVY, "AFRICA  ·  LIBYA",
+         "SEA DRONES SINK WARSHIP",
+         "Suspected Ukrainian drones hit the Russian corvette Merkury "
+         "at Benghazi; the ship capsizes, 10 hurt.",
+         drone_ship_icon),
+        ((margin + col_w + gap, top + row_h + gap,
+          CANVAS[0] - margin, top + 2 * row_h + gap),
+         (178, 130, 24), "AMERICAS  ·  MEXICO",
+         "CHAPO ISIDRO CAPTURED",
+         "Mexican forces seize the FBI's $5m-wanted Fausto Isidro "
+         "Meza-Flores in Sinaloa after firefights kill 11.",
+         badge_icon),
+    ]
+    for box, accent, tag, headline, body, icon in cards:
+        story_card(draw, box, accent, tag, headline, body, icon)
+
+    sport_y = top + 2 * row_h + 2 * gap
+    sport_strip(draw, (margin, sport_y, CANVAS[0] - margin, sport_y + 162),
                 "LIVERPOOL ROUT UNITED IN POCHETTINO'S DEBUT",
-                font(FSB, 26), INK, 460)
-text_block(d, MX + 16, hy + 10,
-           "Ten-man United are hammered at Anfield; Marquez seals an eighth MotoGP crown.",
-           font(FR, 21), SUB, 460)
+                "Ten-man United are hammered at Anfield; Marquez seals "
+                "an eighth MotoGP crown.")
 
-# ---------------------------------------------------------------- footer
-d.line([MX, 962, 1000, 962], fill=INK, width=2)
-d.text((512, 972),
-       "Every story above happened, or was first reported, on Monday 23 November 2026.",
-       font=font(FR, 19), fill=GREY, anchor="ma")
+    draw.line([(margin, 994), (CANVAS[0] - margin, 994)], fill=INK, width=2)
+    centred(draw,
+            "Every story above happened, or was first reported, on "
+            "Monday 23 November 2026.",
+            512, 1002, SERIF(18), BODY_GREY)
+    return img
 
-img.save("/home/hatch/workspace/makefun/news-image-20261123-entry/entry.png",
-         optimize=True)
-print("saved")
+
+if __name__ == "__main__":
+    here = os.path.dirname(os.path.abspath(__file__))
+    out = os.path.join(here, "entry.png")
+    build().save(out, optimize=True)
+    print(f"wrote {out} ({os.path.getsize(out)} bytes)")
